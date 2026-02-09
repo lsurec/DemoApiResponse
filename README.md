@@ -139,25 +139,260 @@ Para mantener un formato consistente en todas las respuestas de la API, se defin
 Crea la clase ``ApiResponseModel`` en la carpeta ``/Models`` con el siguiente contenido:
 
 ```C#
-public class ApiResponseModel<T>
-{
-    public bool Status { get; set; } = false; //Estado de la transaccion
-    public string Message { get; set; } = String.Empty; //Mensaje opcional
-    public string Error { get; set; } = string.Empty; //Descripcion del error
-    public string StoreProcedure { get; set; } = string.Empty; //Nombre del procedimiento almacenado si aplica
-    public Dictionary<string, object>? Parameters { get; set; } //Objeto con los parametros del procedimiento almacenado si aplica
-    public T Data { get; set; } //Respuesta del api
-    public DateTime Timestamp { get; set; } = DateTime.UtcNow; //Hora en la que se realizó la petición
-    public string Version { get; set; } //Version de la aplicacion
+ public class ApiResponseModel<T>
+ {
+     public bool Status { get; set; } = false; //Estado de la transaccion
+     public string Message { get; set; } = String.Empty; //Mensaje opcional
+     public string Error { get; set; } = string.Empty; //Descripcion del error
+     public string StoredProcedure { get; set; } = string.Empty; //Nombre del procedimiento almacenado si aplica
+     public Dictionary<string, object>? Parameters { get; set; } //Objeto con los parametros del procedimiento almacenado si aplica
+     public T Data { get; set; } //Respuesta del api
+     public DateTimeOffset Timestamp { get; set; } = DateTimeOffset.UtcNow;
 
-        //Constructor para que data y configuration sean obligatorios
-    public ApiResponseModel(T data, IConfiguration configuration)
-    {
-        Data = data; //Asignar data a la propiedad
-        Version = configuration["Version"] ?? "Desconocida"; // Usar un valor por defecto si no está configurado
-    }
-}
+     public string Version { get; set; } //Version de la aplicacion
+     public DateTimeOffset? ReleaseDate { get; set; } = null; //Version de la aplicacion
+     public string ErrorCode { get; set; } = string.Empty; // Ej: "1-547" o "2" 1 sql, 2 api, 3 no controlado
+
+     //Constructor para que data y configuration sean obligatorios
+     public ApiResponseModel(T data, IConfiguration configuration)
+     {
+         Data = data; //Asignar data a la propiedad
+         Version = configuration["Version"] ?? "Desconocida"; // Usar un valor por defecto si no está configurado
+         ReleaseDate = ApiResponseModel<T>.GetReleaseDate(configuration); // Usar un valor por defecto si no está configurado
+     }
+     private static DateTimeOffset? GetReleaseDate(IConfiguration configuration)
+     {
+         try
+         {
+             var year = configuration["ReleaseDate:Year"];
+             var month = configuration["ReleaseDate:Month"];
+             var day = configuration["ReleaseDate:Date"];
+             var hour = configuration["ReleaseDate:Hour"];
+             var minute = configuration["ReleaseDate:Minute"];
+
+             if (year == null || month == null || day == null || hour == null || minute == null)
+                 return null;
+
+             return new DateTimeOffset(
+                 int.Parse(year),
+                 int.Parse(month),
+                 int.Parse(day),
+                 int.Parse(hour),
+                 int.Parse(minute),
+                 0,
+                 TimeSpan.Zero // UTC
+             );
+         }
+         catch
+         {
+             return null;
+         }
+     }
+ }
 ```
+---
+
+## Propiedades
+
+### `bool Status`
+
+**Descripción:**
+Indica el estado final de la transacción.
+
+**Uso:**
+
+* `true` → La operación fue exitosa
+* `false` → Ocurrió un error o la operación no fue válida
+
+---
+
+### `string Message`
+
+**Descripción:**
+Mensaje informativo u opcional para el consumidor del API.
+
+**Uso típico:**
+
+* Confirmaciones: `"Operación realizada correctamente"`
+* Mensajes de negocio: `"Acceso autorizado"`, `"Dispositivo bloqueado"`
+
+---
+
+### `string Error`
+
+**Descripción:**
+Contiene la descripción técnica o funcional del error cuando `Status` es `false`.
+
+**Uso:**
+
+* Mensajes de error controlados
+* Excepciones capturadas y traducidas a texto
+
+---
+
+### `string StoredProcedure`
+
+**Descripción:**
+Nombre del procedimiento almacenado ejecutado, si aplica.
+
+**Objetivo:**
+
+* Facilitar **trazabilidad**
+* Auditoría
+* Debug en ambientes productivos
+
+---
+
+### `Dictionary<string, object>? Parameters`
+
+**Descripción:**
+Parámetros enviados al procedimiento almacenado, si aplica.
+
+**Objetivo:**
+
+* Registro de entrada
+* Diagnóstico de errores
+* Análisis de ejecuciones
+
+---
+
+### `T Data`
+
+**Descripción:**
+Contiene la **respuesta principal del API**, tipada según el endpoint.
+
+**Ejemplos:**
+
+* Lista de registros
+* Un objeto
+* Un valor simple
+* `null` en caso de error
+
+---
+
+### `DateTimeOffset Timestamp`
+
+**Descripción:**
+Fecha y hora (UTC) en que se generó la respuesta.
+
+**Objetivo:**
+
+* Trazabilidad
+* Sincronización entre sistemas
+* Auditoría
+
+**Nota:**
+Se inicializa automáticamente con `DateTimeOffset.UtcNow`.
+
+---
+
+### `string Version`
+
+**Descripción:**
+Versión actual de la aplicación que genera la respuesta.
+
+**Origen:**
+Se obtiene desde `IConfiguration`.
+
+---
+
+### `DateTimeOffset? ReleaseDate`
+
+**Descripción:**
+Fecha y hora del release de la versión desplegada.
+
+**Características:**
+
+* Nullable (`null` si no está configurada)
+* Se arma a partir de valores individuales en configuración
+
+---
+
+### `string ErrorCode`
+
+**Descripción:**
+Código estandarizado de error para clasificación.
+
+**Convención sugerida:**
+
+* `1-xxx` → Error SQL
+* `2` → Error de lógica/API
+* `3` → Error no controlado
+
+**Objetivo:**
+
+* Manejo centralizado de errores
+* Compatibilidad con frontends y otros sistemas
+
+---
+
+## Constructor
+
+```csharp
+public ApiResponseModel(T data, IConfiguration configuration)
+```
+
+### Descripción
+
+Constructor principal que **obliga a definir los datos de respuesta y la configuración** de la aplicación.
+
+### Funciones:
+
+* Asigna el contenido de `Data`
+* Obtiene la versión desde configuración
+* Calcula la fecha de release usando un método interno
+
+### Ventaja:
+
+Garantiza que **todas las respuestas incluyan versión y release**, evitando respuestas incompletas.
+
+---
+
+## Método privado `GetReleaseDate`
+
+```csharp
+private static DateTimeOffset? GetReleaseDate(IConfiguration configuration)
+```
+
+### Descripción
+
+Obtiene y construye la fecha de release de la aplicación a partir de valores definidos en configuración.
+
+### Claves de configuración utilizadas:
+
+* `ReleaseDate:Year`
+* `ReleaseDate:Month`
+* `ReleaseDate:Date`
+* `ReleaseDate:Hour`
+* `ReleaseDate:Minute`
+
+---
+
+### Funcionamiento
+
+1. Lee los valores desde `IConfiguration`
+2. Valida que ninguno sea `null`
+3. Convierte los valores a enteros
+4. Construye un `DateTimeOffset` en **UTC**
+5. Si ocurre cualquier error → retorna `null`
+
+---
+
+### Motivo del `try/catch`
+
+* Evita que errores de configuración rompan la respuesta del API
+* Permite que el API siga funcionando aunque la fecha de release no esté definida
+
+---
+
+## Beneficios del diseño
+
+* Respuesta consistente en todos los endpoints
+* Facilita debugging y soporte
+* Mejora trazabilidad en producción
+* Compatible con SQL, APIs externas y lógica interna
+* Escalable para nuevos metadatos
+
 
 ## 6. Clase StoredProcedureExecutor.cs
 
