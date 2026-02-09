@@ -16,8 +16,11 @@ El objetivo de esta documentación es proporcionar los pasos necesarios para con
   - [5. Clase ApiResponseModel.cs](#5-clase-apiresponsemodelcs)
   - [6. Clase StoredProcedureExecutor.cs](#6-clase-storedprocedureexecutorcs)
   - [7. Capa de configuracion de procedimientos almacenados](#7-capa-de-configuracion-de-procedimientos-almacenados)
-    - [Ejemplo de uso:](#ejemplo-de-uso)
   - [8. Capa de configuracion de controladdores y endpoints](#8-capa-de-configuracion-de-controladdores-y-endpoints)
+  - [9. Configuración de versión en `appsettings.json`](#9-configuración-de-versión-en-appsettingsjson)
+  - [10. # Estado de la aplicación `StatusController`](#10--estado-de-la-aplicación-statuscontroller)
+  - [11. Control de errores en la API](#11-control-de-errores-en-la-api)
+  - [12. Manejo de errores no controlados (validación de modelos)](#12-manejo-de-errores-no-controlados-validación-de-modelos)
   - [Notas](#notas)
 
 
@@ -416,74 +419,94 @@ Crea la clase ``StoredProcedureExecutor`` en la carpeta ``/Utilities`` con el si
 
 
 ```C#
-public class StoredProcedureExecutor(IConfiguration configuration)
-{
-    private readonly string _connectionString = configuration.GetConnectionString("ConnectionString") ?? "";
-    private readonly IConfiguration _configuration = configuration;
+ public class StoredProcedureExecutor(IConfiguration configuration)
+ {
+     private readonly string _connectionString = configuration.GetConnectionString("ConnectionString") ?? "";
+     private readonly IConfiguration _configuration = configuration;
 
      //Consumo generico de procedimientos con tabla de respuesta
-    protected async Task<ApiResponseModel<List<T>>> ExecuteStoredProcedureAsync<T>(
-        string procedureName, //Procedsimiento que se sua
-        Func<SqlDataReader, T> mapFunction, //Respuesta que debe retornar
-        params SqlParameter[] parameters //parametros para el procedimeito
-    )
-    {
-        //convertir Sql Parameters en un formato legible: Nombre parametro, valor
-        var formattedParameters = parameters.ToDictionary(p => p.ParameterName, p => p.Value);
+     protected async Task<ApiResponseModel<List<T>>> ExecuteStoredProcedureAsync<T>(
+         string procedureName, //Procedsimiento que se sua
+         Func<SqlDataReader, T> mapFunction, //Respuesta que debe retornar
+         params SqlParameter[] parameters //parametros para el procedimeito
+         )
+     {
+         //convertir Sql Parameters en un formato legible: Nombre parametro, valor
+         var formattedParameters = parameters.ToDictionary(p => p.ParameterName, p => p.Value);
 
-        try
-        {  
-            //Instancia para la conexion
-            using SqlConnection sql = new(_connectionString);
+         try
+         {
+             //Instancia para la conexion
+             using SqlConnection sql = new(_connectionString);
 
-            //Instancia para el comando sql 
-            using SqlCommand cmd = new(procedureName, sql);
+             //Instancia para el comando sql 
+             using SqlCommand cmd = new(procedureName, sql);
 
-            //Tipo de commando 
-            cmd.CommandType = CommandType.StoredProcedure;
+             //Tipo de commando 
+             cmd.CommandType = CommandType.StoredProcedure;
 
-            //Agregar parametros
-            cmd.Parameters.AddRange(parameters);
+             //Agregar parametros
+             cmd.Parameters.AddRange(parameters);
 
-            //abrir conexion
-            await sql.OpenAsync();
+             //abrir conexion
+             await sql.OpenAsync();
 
-            //ejecutar procedimiento
-            using var reader = await cmd.ExecuteReaderAsync();
+             //ejecutar procedimiento
+             using var reader = await cmd.ExecuteReaderAsync();
 
-            //lista para almacenar la tabla
-            List<T> response = [];
+             //lista para almacenar la tabla
+             List<T> response = new();
 
-            //Recorrer cada registro obtenido
-            while (await reader.ReadAsync())
-            {
-                //agregar objeto mapeado
-                response.Add(mapFunction(reader));
-            }
+             //Recorrer cada registro obtenido
+             while (await reader.ReadAsync())
+             {
+                 //agregar objeto mapeado
+                 response.Add(mapFunction(reader));
+             }
 
-            //respuesta
-            return new ApiResponseModel<List<T>>(response, _configuration)
-            {
-                Parameters = formattedParameters, //parametros
-                Status = true, //estado 
-                StoreProcedure = procedureName, //nompre pa si aplica
-                Message = "Operacion exitosa" //mensaje si aplica
-            };
-        }
-        catch (Exception e)
-        {
-            //respuesta
-            return new ApiResponseModel<List<T>>([], _configuration)
-            {
-                Parameters = formattedParameters, //parametros si aplica
-                Error = e.Message, //descripcion del error
-                Status = false, //estado 
-                StoreProcedure = procedureName, //nombre del pa si aplica
-                Message = "Operacion fallida" //mensaje si aplica
-            };
-        }
-    }
-}
+             //respuesta
+             return new ApiResponseModel<List<T>>(response, _configuration)
+             {
+                 Parameters = formattedParameters, //parametros
+                 Status = true, //estado 
+                 StoredProcedure = procedureName, //nompre pa si aplica
+                 Message = "Operacion exitosa" //mensaje si aplica
+             };
+
+         }
+         //control de errores de sql
+         catch (SqlException ex)
+         {
+             return new ApiResponseModel<List<T>>(new List<T>(), _configuration)
+             {
+                 Parameters = formattedParameters,
+                 Error = ex.Message,
+                 ErrorCode = $"1-{ex.Number}", // Prefijo 1 indica error SQL
+                 Status = false,
+                 StoredProcedure = procedureName,
+                 Message = "Error en la base de datos."
+             };
+         }
+         //control de errores por ejecucion del codigo de la API, como errores de mapeo o de logica
+         catch (Exception e)
+         {
+             //respuesta
+             return new ApiResponseModel<List<T>>(new List<T>(), _configuration)
+             {
+                 Parameters = formattedParameters, //parametros si aplica
+                 Error = e.Message, //descripcion del error
+                 Status = false, //estado 
+                 StoredProcedure = procedureName, //nombre del pa si aplica
+                 Message = "Error en la lógica de la API.", //mensaje si aplica
+                 ErrorCode = "2" // Prefijo 2 indica error en la API
+             };
+
+
+         }
+
+
+     }
+ }
 ```
 
 **Notas:**
@@ -517,9 +540,9 @@ GO
 
 Que corresponde a la lista de responsables para una tarea (respuesta sql):
 
-| Tarea_UserName          | EMail                              | UserName |
-|--------------------|---------------------------------|-------------|
-| 527   | soportesistemas@demosoftonline.com                        | DESA003 |
+| Tarea_UserName | EMail                              | UserName |
+| -------------- | ---------------------------------- | -------- |
+| 527            | soportesistemas@demosoftonline.com | DESA003  |
 ---
 
 1. **Creación del modelo de datos**
@@ -676,6 +699,846 @@ public class ExampleController(IConfiguration configuration) : ControllerBase
   "version": "Desconocida"
 }
 ```
+---
+## 9. Configuración de versión en `appsettings.json`
+
+### Descripción general
+
+La aplicación debe definir explícitamente su **versión** y **fecha de release** dentro del archivo `appsettings.json`.
+Esta información es consumida por el modelo estándar `ApiResponseModel<T>` y se incluye automáticamente en **todas las respuestas del API**.
+
+Esto permite:
+
+* Identificar exactamente **qué versión del sistema respondió**
+* Facilitar **soporte, auditoría y debugging**
+* Detectar problemas asociados a un despliegue específico
+
+---
+
+## Estructura de configuración
+
+```json
+"Version": "1.1.44",
+"ReleaseDate": {
+  "Year": "2026",   // yyyy
+  "Month": "02",   // MM
+  "Date": "05",    // dd
+  "Hour": "12",    // Formato 24 horas
+  "Minute": "25"   // mm
+}
+```
+
+---
+
+## Descripción de cada campo
+
+### `Version`
+
+**Tipo:** `string`
+**Ejemplo:** `"1.1.44"`
+
+**Descripción:**
+Identifica la versión de la aplicación desplegada.
+
+**Convención recomendada:**
+
+* `MAJOR.MINOR.BUILD`
+* Ejemplo:
+
+  * `1.0.0` → Release inicial
+  * `1.1.0` → Mejora funcional
+  * `1.1.44` → Fix o build incremental
+
+---
+
+### `ReleaseDate`
+
+Objeto que representa la **fecha y hora exacta del despliegue**.
+
+> Se define por partes para evitar problemas de formato, cultura o zona horaria.
+
+---
+
+#### `ReleaseDate:Year`
+
+* Año del release
+* Formato: `yyyy`
+* Ejemplo: `"2026"`
+
+---
+
+#### `ReleaseDate:Month`
+
+* Mes del release
+* Formato: `MM`
+* Rango válido: `01–12`
+
+---
+
+#### `ReleaseDate:Date`
+
+* Día del mes
+* Formato: `dd`
+* Rango válido: `01–31`
+
+---
+
+#### `ReleaseDate:Hour`
+
+* Hora del release
+* Formato: 24 horas
+* Rango válido: `00–23`
+
+---
+
+#### `ReleaseDate:Minute`
+
+* Minutos del release
+* Formato: `mm`
+* Rango válido: `00–59`
+
+---
+
+## ¿Cómo llenar estos valores?
+
+### Regla obligatoria
+
+**Cada vez que la aplicación se compila o se despliega**, estos valores **deben actualizarse**.
+
+---
+
+### Proceso recomendado
+
+1. Incrementar el número de `Version`
+2. Colocar la **fecha y hora real del build**
+3. Validar que todos los campos existan
+4. Desplegar la aplicación
+
+---
+
+### Ejemplo práctico
+
+Si se realiza un despliegue el **5 de febrero de 2026 a las 12:25 UTC**, la configuración debe quedar:
+
+```json
+"Version": "1.1.44",
+"ReleaseDate": {
+  "Year": "2026",
+  "Month": "02",
+  "Date": "05",
+  "Hour": "12",
+  "Minute": "25"
+}
+```
+
+---
+
+## ¿Por qué es una buena práctica?
+
+### 1. Trazabilidad total
+
+Permite identificar exactamente:
+
+* Qué versión generó un error
+* En qué despliegue apareció un bug
+* Si un cliente está usando una versión obsoleta
+
+---
+
+### 2. Soporte y debugging más rápido
+
+Evita preguntas como:
+
+> “¿En qué versión estás?”
+
+La respuesta viene **directamente en el API**.
+
+---
+
+### 3. Auditoría y control de cambios
+
+* Facilita el análisis histórico
+* Permite correlacionar logs, errores y releases
+
+---
+
+### 4. Independencia del entorno
+
+* No depende del servidor
+* No depende del sistema operativo
+* No depende de la cultura regional
+
+---
+
+### 5. Prevención de errores por caché o despliegues incompletos
+
+Si dos ambientes responden con versiones distintas, el problema es visible inmediatamente.
+
+---
+
+## Comportamiento ante configuración incompleta
+
+Si alguno de los campos de `ReleaseDate`:
+
+* No existe
+* Tiene un formato inválido
+
+`ReleaseDate` se devolverá como `null`, **sin afectar el funcionamiento del API**.
+
+Esto evita caídas por errores de configuración.
+
+---
+
+## Recomendación final
+
+**La versión y la fecha de release son parte del contrato del API**, no solo información interna.
+
+Deben:
+
+* Estar siempre presentes
+* Actualizarse en cada compilación
+* Ser visibles en todas las respuestas
+---
+
+## 10. # Estado de la aplicación `StatusController`
+
+### Descripción general
+
+El `StatusController` es un **controlador técnico de monitoreo**, cuyo objetivo es **verificar el estado de la aplicación publicada** sin ejecutar lógica de negocio ni depender de procesos complejos.
+
+Este controlador permite confirmar rápidamente que:
+
+* La aplicación está **levantada**
+* La configuración es **válida**
+* La versión desplegada es la correcta
+* El API responde usando el **formato estándar**
+
+---
+
+## Endpoint: `GET /status`
+
+Este endpoint sirve para:
+
+* Validar que el API está **operativo**
+* Confirmar la **versión y fecha de release** desplegada
+* Verificar que la **respuesta estándar** funciona correctamente
+* Proveer información técnica **útil para el encargado del despliegue**
+* Facilitar pruebas rápidas post-deploy
+
+---
+
+## Implementación
+
+```csharp
+[HttpGet]
+public IActionResult StatusApp()
+{
+    ApiResponseModel<List<object>> status = new(new List<object>(), _configuration)
+    {
+        Status = true,
+        Message = "Ok"
+    };
+
+    return Ok(status);
+}
+```
+
+---
+
+## Análisis del método `StatusApp`
+
+### Tipo
+
+* **HTTP Method:** `GET`
+* **Acción:** Solo lectura
+* **Side effects:** Ninguno
+
+---
+
+### Flujo de ejecución
+
+1. Se crea una instancia de `ApiResponseModel<List<object>>`
+2. Se inicializa `Data` como una lista vacía
+3. Se inyecta `IConfiguration` para:
+
+   * Obtener la versión
+   * Obtener la fecha de release
+4. Se establece:
+
+   * `Status = true`
+   * `Message = "Ok"`
+5. Se retorna una respuesta HTTP `200 (OK)`
+
+---
+
+## ¿Por qué `List<object>`?
+
+* No se retorna información de negocio
+* Permite extender el endpoint en el futuro
+* Evita romper el contrato del API
+* Mantiene una estructura consistente
+
+---
+
+## Información que devuelve el endpoint
+
+Gracias al uso de `ApiResponseModel<T>`, el endpoint retorna automáticamente:
+
+* Estado de la aplicación (`Status`)
+* Mensaje general (`Message`)
+* Versión del API (`Version`)
+* Fecha del release (`ReleaseDate`)
+* Timestamp de la respuesta (`Timestamp`)
+
+---
+
+## Ejemplo de respuesta JSON
+
+```json
+{
+  "status": true,
+  "message": "Ok",
+  "error": "",
+  "storedProcedure": "",
+  "parameters": null,
+  "data": [],
+  "timestamp": "2026-02-09T18:30:15.123Z",
+  "version": "1.1.44",
+  "releaseDate": "2026-02-05T12:25:00+00:00",
+  "errorCode": ""
+}
+```
+
+---
+
+## ¿Para quién es este endpoint?
+
+### DevOps / Encargado de despliegue
+
+* Verifica que el deploy fue exitoso
+* Confirma que la versión es la correcta
+* Detecta despliegues incompletos
+
+---
+
+### Soporte técnico
+
+* Identifica rápidamente la versión en producción
+* Facilita diagnóstico de incidencias
+
+---
+
+### Monitoreo
+
+* Puede ser consumido por:
+
+  * Load balancers
+  * Health checks
+  * Scripts automáticos
+  * Pipelines de CI/CD
+
+---
+
+## Buenas prácticas aplicadas
+
+### 1. No depende de base de datos
+
+Evita falsos negativos por fallas externas.
+
+---
+
+### 2. Respuesta rápida
+
+Ideal para monitoreo constante.
+
+---
+
+### 3. Usa el contrato estándar
+
+Garantiza consistencia con el resto del API.
+
+---
+
+### 4. Seguro
+
+No expone:
+
+* Credenciales
+* Datos sensibles
+* Lógica de negocio
+
+---
+
+## Recomendaciones adicionales
+
+* No requerir autenticación
+* No incluir lógica pesada
+* Mantenerlo siempre disponible
+* Usarlo como **primer punto de validación post-deploy**
+
+---
+
+## Recomendación final
+
+**Todo API debe exponer un endpoint de estado** que permita validar rápidamente:
+
+> *“La aplicación está viva, esta es su versión y este es su release.”*
+
+Este controlador cumple exactamente ese propósito.
+
+---
+
+## 11. Control de errores en la API
+
+### Descripción general
+
+La API implementa un **manejo de errores estandarizado**, basado en bloques `try / catch`, con el objetivo de:
+
+* Capturar errores de forma controlada
+* Clasificar el tipo de error ocurrido
+* Retornar siempre una respuesta válida y consistente
+* Evitar que excepciones no controladas rompan el contrato del API
+
+Todos los errores se devuelven utilizando el modelo estándar `ApiResponseModel<T>`.
+
+---
+
+## Estructura general
+
+```csharp
+try
+{
+    // Lógica principal del endpoint
+}
+```
+
+El bloque `try` contiene:
+
+* Ejecución de procedimientos almacenados
+* Mapeo de resultados
+* Lógica de negocio del API
+
+Cualquier excepción generada dentro de este bloque será interceptada por los `catch` definidos.
+
+---
+
+## Control de errores SQL
+
+```csharp
+catch (SqlException ex)
+{
+    return new ApiResponseModel<List<T>>(new List<T>(), _configuration)
+    {
+        Parameters = formattedParameters,
+        Error = ex.Message,
+        ErrorCode = $"1-{ex.Number}",
+        Status = false,
+        StoredProcedure = procedureName,
+        Message = "Error en la base de datos."
+    };
+}
+```
+
+### Tipo de error
+
+* Excepciones generadas por SQL Server
+* Problemas en ejecución de procedimientos almacenados
+* Violaciones de llaves, tipos, restricciones, timeouts, etc.
+
+---
+
+### Convención de `ErrorCode`
+
+* Prefijo `1` → Error de base de datos (SQL)
+* `ex.Number` → Código nativo del error SQL
+
+**Ejemplo:**
+
+```
+1-547   → Violación de constraint
+1-2627  → Llave duplicada
+```
+
+Esto permite:
+
+* Identificar rápidamente el origen del problema
+* Filtrar errores por tipo
+* Integrar con sistemas de monitoreo
+
+---
+
+### Campos relevantes devueltos
+
+| Campo             | Descripción                         |
+| ----------------- | ----------------------------------- |
+| `Status`          | `false`, indica fallo               |
+| `Message`         | Mensaje genérico para el consumidor |
+| `Error`           | Mensaje técnico del error SQL       |
+| `ErrorCode`       | Código estandarizado del error      |
+| `StoredProcedure` | Procedimiento almacenado ejecutado  |
+| `Parameters`      | Parámetros enviados al SP           |
+
+---
+
+### ¿Por qué separar errores SQL?
+
+* SQL es una dependencia externa
+* Sus errores tienen códigos propios
+* Requieren diagnóstico distinto al de la lógica del API
+
+---
+
+## Control de errores de la API (lógica / ejecución)
+
+```csharp
+catch (Exception e)
+{
+    return new ApiResponseModel<List<T>>(new List<T>(), _configuration)
+    {
+        Parameters = formattedParameters,
+        Error = e.Message,
+        Status = false,
+        StoredProcedure = procedureName,
+        Message = "Error en la lógica de la API.",
+        ErrorCode = "2"
+    };
+}
+```
+
+---
+
+### Tipo de error
+
+* Errores de mapeo de datos
+* Errores de conversión
+* Errores de lógica
+* Excepciones no SQL
+* Fallos internos del código del API
+
+---
+
+### Convención de `ErrorCode`
+
+* `2` → Error en la lógica o ejecución del API
+
+Este tipo de error indica:
+
+> “La base de datos respondió, pero la API falló al procesar el resultado o la lógica.”
+
+---
+
+### Campos relevantes devueltos
+
+| Campo             | Descripción                     |
+| ----------------- | ------------------------------- |
+| `Status`          | `false`                         |
+| `Message`         | Mensaje funcional               |
+| `Error`           | Mensaje técnico de la excepción |
+| `ErrorCode`       | Clasificación del error         |
+| `StoredProcedure` | SP asociado (si aplica)         |
+| `Parameters`      | Parámetros de entrada           |
+
+---
+
+## Buenas prácticas aplicadas
+
+### 1. Nunca se rompe el contrato del API
+
+Siempre se retorna `ApiResponseModel<T>`, incluso ante errores.
+
+---
+
+### 2. Clasificación clara de errores
+
+Permite distinguir rápidamente:
+
+* Error SQL
+* Error de API
+* Error no controlado ( prefijo `3`)
+
+---
+
+### 3. Información técnica sin exponer lógica sensible
+
+* `Message` es genérico
+* `Error` es técnico (útil para soporte)
+* No se exponen stack traces
+
+---
+
+### 4. Facilita soporte y debugging
+
+Con:
+
+* Nombre del SP
+* Parámetros enviados
+* Código de error estandarizado
+* Versión y release (incluidos automáticamente)
+
+---
+
+## Ejemplo de respuesta ante error SQL
+
+```json
+{
+  "status": false,
+  "message": "Error en la base de datos.",
+  "error": "The INSERT statement conflicted with the FOREIGN KEY constraint...",
+  "errorCode": "1-547",
+  "storedProcedure": "sp_insert_documento",
+  "parameters": {
+    "@Id": 10
+  },
+  "data": [],
+  "version": "1.1.44",
+  "releaseDate": "2026-02-05T12:25:00+00:00"
+}
+```
+
+---
+
+## Recomendación final
+
+**Todo error debe ser controlado, clasificado y documentado**, no lanzado directamente al cliente.
+
+Este esquema:
+
+* Hace el API más robusto
+* Reduce tiempos de soporte
+* Mejora la calidad del despliegue
+* Facilita monitoreo y auditoría
+
+---
+
+## 12. Manejo de errores no controlados (validación de modelos)
+
+### Ubicación
+
+`Program.cs`
+
+---
+
+## Descripción general
+
+Este bloque configura el **manejo global de errores de validación del modelo** (`ModelState`) en la API.
+
+Su objetivo es:
+
+* Interceptar errores **antes de que entren al controller**
+* Evitar respuestas automáticas inconsistentes de ASP.NET
+* Retornar siempre la **respuesta estándar del API**
+* Clasificar estos errores como **errores no controlados (código 3)**
+
+---
+
+## Contexto del problema
+
+Por defecto, ASP.NET Core:
+
+* Retorna un `400 Bad Request`
+* Con una estructura propia (`ProblemDetails`)
+* Sin versión, sin release, sin contrato estándar
+
+Esto rompe la consistencia del API.
+
+---
+
+## Solución aplicada
+
+Se sobreescribe el comportamiento por defecto usando:
+
+```csharp
+ApiBehaviorOptions.InvalidModelStateResponseFactory
+```
+
+Esto permite **controlar completamente la respuesta** cuando:
+
+* Faltan campos obligatorios
+* Fallan validaciones (`[Required]`, `[MaxLength]`, etc.)
+* El modelo no puede mapearse correctamente
+
+---
+
+## Implementación
+
+```csharp
+var configuration = builder.Configuration;
+
+builder.Services.Configure<ApiBehaviorOptions>(options =>
+{
+    options.InvalidModelStateResponseFactory = context =>
+    {
+        var errors = context.ModelState
+            .Where(e => e.Value.Errors.Count > 0)
+            .ToDictionary(
+                e => e.Key,
+                e => e.Value.Errors.Select(err => err.ErrorMessage).ToArray()
+            );
+
+        ApiResponseModel<List<object>> response = new(new List<object>(), configuration)
+        {
+            Error = JsonConvert.SerializeObject(errors),
+            Message = "Error no controlado",
+            ErrorCode = "3"
+        };
+
+        return new BadRequestObjectResult(response);
+    };
+});
+```
+
+---
+
+## Flujo de ejecución
+
+1. El cliente envía una solicitud inválida
+2. ASP.NET detecta errores de validación
+3. **No se ejecuta el controller**
+4. Se activa `InvalidModelStateResponseFactory`
+5. Se construye una respuesta estándar
+6. Se retorna `400 Bad Request`
+
+---
+
+## Procesamiento de errores
+
+### Extracción de errores
+
+```csharp
+context.ModelState
+```
+
+Se recorre el `ModelState` para obtener:
+
+* Nombre del campo
+* Mensajes de error asociados
+
+El resultado final es un diccionario como:
+
+```json
+{
+  "Nombre": ["El campo Nombre es obligatorio"],
+  "Edad": ["El valor debe ser mayor a 0"]
+}
+```
+
+---
+
+### Campo `Error`
+
+Los errores se serializan a JSON y se asignan a:
+
+```csharp
+Error = JsonConvert.SerializeObject(errors)
+```
+
+Esto permite:
+
+* Mantener la estructura completa
+* Facilitar lectura desde frontend
+* No perder detalle técnico
+
+---
+
+## Convención de `ErrorCode`
+
+### Código `3` → Error no controlado
+
+Este tipo de error indica:
+
+* Fallo de validación
+* Error de entrada del cliente
+* Problemas antes de ejecutar la lógica del API
+
+No es:
+
+* Error SQL
+* Error de lógica interna
+
+---
+
+## Campos devueltos
+
+| Campo         | Descripción                      |
+| ------------- | -------------------------------- |
+| `Status`      | Implícitamente `false`           |
+| `Message`     | `"Error no controlado"`          |
+| `Error`       | Detalle de validaciones fallidas |
+| `ErrorCode`   | `"3"`                            |
+| `Data`        | Lista vacía                      |
+| `Version`     | Versión del API                  |
+| `ReleaseDate` | Fecha del release                |
+| `Timestamp`   | Momento de la respuesta          |
+
+---
+
+## Ejemplo de respuesta
+
+```json
+{
+  "status": false,
+  "message": "Error no controlado",
+  "error": "{\"Nombre\":[\"El campo Nombre es obligatorio\"]}",
+  "errorCode": "3",
+  "data": [],
+  "version": "1.1.44",
+  "releaseDate": "2026-02-05T12:25:00+00:00"
+}
+```
+
+---
+
+## ¿Por qué manejarlo en `Program.cs`?
+
+### 1. Centralización
+
+* No se repite código en cada controller
+* Aplica a toda la API
+
+---
+
+### 2. Consistencia
+
+* Todas las respuestas siguen el mismo contrato
+* No hay respuestas “especiales” de ASP.NET
+
+---
+
+### 3. Separación de responsabilidades
+
+* Controllers → lógica de negocio
+* Program.cs → comportamiento global del API
+
+---
+
+### 4. Prevención de errores silenciosos
+
+* El cliente siempre sabe **por qué falló**
+* El backend no ejecuta lógica innecesaria
+
+---
+
+## Relación con la clasificación de errores
+
+| Código  | Tipo de error                    |
+| ------- | -------------------------------- |
+| `1-XXX` | Error SQL                        |
+| `2`     | Error de lógica de la API        |
+| `3`     | Error no controlado / validación |
+
+---
+
+## Recomendación final
+
+**Todo API profesional debe manejar errores de validación a nivel global**.
+
+Este enfoque:
+
+* Refuerza el contrato del API
+* Simplifica soporte
+* Mejora la experiencia del consumidor
+* Hace el sistema más predecible y robusto
+
 ---
 ## Notas
 * En este proyecto no se incluyen la base de datos o credenciales, verifica tu cadena de conexión y que tengas disponible un procedimiento almacenado.
