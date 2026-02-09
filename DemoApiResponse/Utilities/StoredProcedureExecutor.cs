@@ -40,7 +40,7 @@ namespace DemoApiResponse.Utilities
                 using var reader = await cmd.ExecuteReaderAsync();
 
                 //lista para almacenar la tabla
-                List<T> response = [];
+                List<T> response = new();
 
                 //Recorrer cada registro obtenido
                 while (await reader.ReadAsync())
@@ -54,23 +54,42 @@ namespace DemoApiResponse.Utilities
                 {
                     Parameters = formattedParameters, //parametros
                     Status = true, //estado 
-                    StoreProcedure = procedureName, //nompre pa si aplica
+                    StoredProcedure = procedureName, //nompre pa si aplica
                     Message = "Operacion exitosa" //mensaje si aplica
                 };
 
             }
+            //control de errores de sql
+            catch (SqlException ex)
+            {
+                return new ApiResponseModel<List<T>>(new List<T>(), _configuration)
+                {
+                    Parameters = formattedParameters,
+                    Error = ex.Message,
+                    ErrorCode = $"1-{ex.Number}", // Prefijo 1 indica error SQL
+                    Status = false,
+                    StoredProcedure = procedureName,
+                    Message = "Error en la base de datos."
+                };
+            }
+            //control de errores por ejecucion del codigo de la API, como errores de mapeo o de logica
             catch (Exception e)
             {
                 //respuesta
-                return new ApiResponseModel<List<T>>([], _configuration)
+                return new ApiResponseModel<List<T>>(new List<T>(), _configuration)
                 {
                     Parameters = formattedParameters, //parametros si aplica
                     Error = e.Message, //descripcion del error
                     Status = false, //estado 
-                    StoreProcedure = procedureName, //nombre del pa si aplica
-                    Message = "Operacion fallida" //mensaje si aplica
+                    StoredProcedure = procedureName, //nombre del pa si aplica
+                    Message = "Error en la lógica de la API.", //mensaje si aplica
+                    ErrorCode = "2" // Prefijo 2 indica error en la API
                 };
+
+
             }
+
+
         }
     }
 }

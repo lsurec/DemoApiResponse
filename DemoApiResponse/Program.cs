@@ -1,4 +1,33 @@
+using DemoApiResponse.Models;
+using Microsoft.AspNetCore.Mvc;
+using Newtonsoft.Json;
+
 var builder = WebApplication.CreateBuilder(args);
+
+var configuration = builder.Configuration;
+
+builder.Services.Configure<ApiBehaviorOptions>(options =>
+{
+    options.InvalidModelStateResponseFactory = context =>
+    {
+        var errors = context.ModelState
+            .Where(e => e.Value.Errors.Count > 0)
+            .ToDictionary(
+                e => e.Key,
+                e => e.Value.Errors.Select(err => err.ErrorMessage).ToArray()
+            );
+
+
+        ApiResponseModel<List<object>> response = new(new List<object>(), configuration)
+        {
+            Error = JsonConvert.SerializeObject(errors),
+            Message = "Error no controlado",
+            ErrorCode = "3", // Error no controlado
+        };
+
+        return new BadRequestObjectResult(response);
+    };
+});
 
 // Add services to the container.
 
